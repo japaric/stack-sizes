@@ -1,0 +1,12 @@
+[package]
+name = "stack-sizes"
+version = "0.1.0"
+authors = ["Jorge Aparicio <jorge@japaric.io>"]
+
+[dependencies]
+byteorder = "1.2.3"
+clap = "2.32.0"
+failure = "0.1.1"
+leb128 = "0.2.3"
+rustc-demangle = "0.1.8"
+xmas-elf = "0.6.2"
