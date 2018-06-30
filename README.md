@@ -2,9 +2,9 @@
 
 > Tool to print stack usage information emitted by LLVM in human readable format
 
-This tool depends on PR [rust-lang/rust#XXX].
+This tool depends on PR [rust-lang/rust#51946].
 
-[rust-lang/rust#XXX]: TODO
+[rust-lang/rust#51946]: https://github.com/rust-lang/rust/pull/51946
 
 ## Format
 
