@@ -1,37 +1,53 @@
 # `stack-sizes`
 
-> Tool to print stack usage information emitted by LLVM in human readable format
+> Tools to print stack usage information emitted by LLVM in human readable format
 
-This tool depends on PR [rust-lang/rust#51946].
+## Background information
+
+In [rust-lang/rust#51946] `rustc` gained a (nightly only) `-Z emit-stack-sizes`
+flag to (make LLVM) emit stack usage information about functions.
 
 [rust-lang/rust#51946]: https://github.com/rust-lang/rust/pull/51946
 
-## Format
+`stack-sizes` parses the metadata emitted by that flag and prints it in human
+readable format.
 
-The tool expects the object file to contain a `.stack_sizes` section with stack usage information
-emitted by LLVM ([`-stack-size-section`]). For convenience, the documentation about
-`-stack-size-section` is copied below:
+`cargo stack-sizes` does something similar but first it build the whole
+dependency graph with `-Z emit-stack-sizes`.
+
+## Metadata format
+
+The tools expect the object file to contain a `.stack_sizes` section with stack
+usage information emitted by LLVM ([`-stack-size-section`]). For convenience,
+the documentation about `-stack-size-section` is copied below:
 
 [`-stack-size-section`]: https://llvm.org/docs/CodeGenerator.html#emitting-function-stack-size-information
 
 > A section containing metadata on function stack sizes will be emitted when
-> TargetLoweringObjectFile::StackSizesSection is not null, and TargetOptions::EmitStackSizeSection
-> is set (-stack-size-section). The section will contain an array of pairs of function symbol values
-> (pointer size) and stack sizes (unsigned LEB128). The stack size values only include the space
-> allocated in the function prologue. Functions with dynamic stack allocations are not included.
+> TargetLoweringObjectFile::StackSizesSection is not null, and
+> TargetOptions::EmitStackSizeSection is set (-stack-size-section). The section
+> will contain an array of pairs of function symbol values (pointer size) and
+> stack sizes (unsigned LEB128). The stack size values only include the space
+> allocated in the function prologue. Functions with dynamic stack allocations
+> are not included.
 
 ## Installation
 
-```
-$ cargo install --git https://github.com/japaric/stack-sizes
+``` console
+$ cargo +stable install stack-sizes
 ```
 
 ## Example usage
 
-``` console
-$ cargo new --bin hello && cd $_
+The recommended way to analyze your program is to use the `cargo stack-sizes`
+subcommand.
 
-$ cat >src/main.rs <<'EOF'
+Most targets will discard `.stack_sizes` information at link time so the linking
+process needs to be tweaked to keep the information in the final binary.
+
+Consider a Cargo project named `hello` with the following `src/main.rs` file:
+
+``` rust
 use std::{mem, ptr};
 
 fn main() {
@@ -42,7 +58,7 @@ fn main() {
 #[inline(never)]
 fn registers() {
     unsafe {
-        // values loaded into registers
+        // values loaded into registers; doesn't use the stack
         ptr::read_volatile(&(0u64, 1u64));
     }
 }
@@ -57,43 +73,60 @@ fn stack() {
         }
     }
 }
-EOF
+```
 
-$ # we need a custom linking step to preserve the .stack_sizes section
-$ cat > keep-stack-sizes.x <<'EOF'
+We'll use [this linker script](keep-stack-sizes.x) to preserve the
+`.stack_sizes` information. Place that linker script in the root of the Cargo
+project.
+
+``` console
+$ cat keep-stack-sizes.x
+```
+
+``` text
 SECTIONS
 {
-  .stack_sizes :
+  .stack_sizes (INFO) :
   {
     KEEP(*(.stack_sizes));
   }
 }
-EOF
-
-$ cargo rustc --release -- \
-    -Z emit-stack-sizes \
-    -C link-arg=-Wl,-Tkeep-stack-sizes.x \
-    -C link-arg=-N
-
-$ size -A target/release/hello | grep stack_sizes
-.stack_sizes    117   185136
-
-$ stack-sizes target/release/hello
-address                 size    name
-0x000000000004b0        0       core::array::<impl core::iter::traits::IntoIterator for &'a [T; _]>::into_iter::ha50e6661c0ec84aa
-0x000000000004c0        8       std::rt::lang_start::ha02aea783e0e1b3e
-0x000000000004f0        8       std::rt::lang_start::{{closure}}::h5115b527d5244952
-0x00000000000500        8       core::ops::function::FnOnce::call_once::h6bfa1076da82b0fb
-0x00000000000510        0       core::ptr::drop_in_place::hb4de82e57787bc70
-0x00000000000520        8       hello::main::h08bb6cec0556bd66
-0x00000000000530        0       hello::registers::h9d058a5d765ec1d2
-0x00000000000540        24      hello::stack::h88c8cb66adfdc6f3
-0x00000000000580        8       main
-0x000000000005b0        0       __rust_alloc
-0x000000000005c0        0       __rust_dealloc
-0x000000000005d0        0       __rust_realloc
-0x000000000005e0        0       __rust_alloc_zeroed
 ```
+
+Now we can build the project. `cargo stack-sizes` has a similar CLI to `cargo
+rustc`. Flags after `--` will be passed to the *top* `rustc` invocation. We'll
+use those flags to pass the linker script to the linker.
+
+``` console
+$ cargo +nightly stack-sizes \
+      --bin hello \
+      --release \
+      -v \
+      -- -C link-arg=-Wl,-Tkeep-stack-sizes.x -C link-arg=-N
+RUSTC=stack-sizes-rustc "cargo" "rustc" "--bin" "hello" "--release" "--" "-C" "link-arg=-Wl,-Tkeep-stack-sizes.x" "-C" "link-arg=-N"
+(..)
+    Finished release [optimized] target(s) in 0.63s
+"stack-sizes" "target/release/hello"
+address                 stack   name
+0x0000000000000550      24      hello::stack::hebd29682aa7dd994
+0x00000000000004d0      8       std::rt::lang_start::h272a86063047800b
+0x0000000000000500      8       std::rt::lang_start::{{closure}}::h22007b5ddf658a64
+0x0000000000000510      8       core::ops::function::FnOnce::call_once::hb7bafcf111f236ed
+0x0000000000000530      8       hello::main::hb36271094cf69f90
+0x0000000000000590      8       main
+0x00000000000004c0      0       core::array::<impl core::iter::traits::IntoIterator for &'a [T; _]>::into_iter::h63e320078b8d6e5b
+0x0000000000000520      0       core::ptr::drop_in_place::h6545f3e9027cd0b3
+0x0000000000000540      0       hello::registers::h16b8b9c5d4e45cf5
+0x00000000000005c0      0       __rust_alloc
+0x00000000000005d0      0       __rust_dealloc
+0x00000000000005e0      0       __rust_realloc
+0x00000000000005f0      0       __rust_alloc_zeroed
+```
+
+## Library
+
+This crate can also be used as a library to parse `.stack_sizes` information.
+The API documentation can be found [here](https://docs.rs/stack-sizes).
 
 ## License
 
@@ -107,6 +140,6 @@ at your option.
 
 ### Contribution
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the
-work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
-additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
