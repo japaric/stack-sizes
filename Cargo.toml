@@ -1,11 +1,19 @@
 [package]
-name = "stack-sizes"
-version = "0.1.0"
 authors = ["Jorge Aparicio <jorge@japaric.io>"]
+categories = ["command-line-utilities"]
+description = "Tools to print stack usage information emitted by LLVM in human readable format"
+documentation = "https://docs.rs/stack-sizes"
+keywords = ["stack", "usage", "analysis"]
+license = "MIT OR Apache-2.0"
+name = "stack-sizes"
+repository = "https://github.com/japaric/stack-sizes"
+version = "0.1.0"
 
 [dependencies]
 byteorder = "1.2.3"
+cargo-project = "0.1.0"
 clap = "2.32.0"
+either = "1.5.0"
 failure = "0.1.1"
 leb128 = "0.2.3"
 rustc-demangle = "0.1.8"
