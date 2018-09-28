@@ -1,4 +1,4 @@
-//! [`.stack_sizes`] parser
+//! Library to parse stack usage information ([`.stack_sizes`]) produced by LLVM
 //!
 //! [`.stack_sizes`]: https://llvm.org/docs/CodeGenerator.html#emitting-function-stack-size-information
 
@@ -6,15 +6,17 @@
 #![deny(warnings)]
 
 extern crate byteorder;
-extern crate clap;
 extern crate either;
 #[macro_use]
 extern crate failure;
 extern crate leb128;
+#[cfg(feature = "tools")]
 extern crate rustc_demangle;
 extern crate xmas_elf;
 
-use std::{collections::HashMap, fs::File, io::Cursor, io::Read, path::Path, u32};
+use std::{collections::HashMap, io::Cursor, u32};
+#[cfg(feature = "tools")]
+use std::{fs::File, io::Read, path::Path};
 
 use byteorder::{ReadBytesExt, LE};
 use either::Either;
@@ -147,6 +149,7 @@ pub fn analyze(
     }
 }
 
+#[cfg(feature = "tools")]
 #[doc(hidden)]
 pub fn run<P>(path: P) -> Result<(), failure::Error>
 where

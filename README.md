@@ -4,16 +4,19 @@
 
 ## Background information
 
-In [rust-lang/rust#51946] `rustc` gained a (nightly only) `-Z emit-stack-sizes`
+Since ` nightly-2018-09-27` `rustc` has a (nightly only) [`-Z emit-stack-sizes`]
 flag to (make LLVM) emit stack usage information about functions.
 
-[rust-lang/rust#51946]: https://github.com/rust-lang/rust/pull/51946
+[`-Z emit-stack-sizes`]: https://doc.rust-lang.org/nightly/unstable-book/compiler-flags/emit-stack-sizes.html
 
-`stack-sizes` parses the metadata emitted by that flag and prints it in human
-readable format.
+> **NOTE**: This feature only works when the output artifact has the ELF object
+> format.
 
-`cargo stack-sizes` does something similar but first it build the whole
-dependency graph with `-Z emit-stack-sizes`.
+The `stack-sizes` tool parses the metadata emitted by that flag and prints it in
+human readable format.
+
+The `cargo stack-sizes` subcommand does something similar but first it builds
+the whole dependency graph with `-Z emit-stack-sizes`.
 
 ## Metadata format
 
@@ -126,7 +129,9 @@ address                 stack   name
 ## Library
 
 This crate can also be used as a library to parse `.stack_sizes` information.
-The API documentation can be found [here](https://docs.rs/stack-sizes).
+The API documentation can be found [here](https://docs.rs/stack-sizes). It's
+recommended to disable the default `tool` feature of this crate, which builds
+the tools, when using it as a library.
 
 ## License
 
