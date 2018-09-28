@@ -6,15 +6,41 @@ documentation = "https://docs.rs/stack-sizes"
 keywords = ["stack", "usage", "analysis"]
 license = "MIT OR Apache-2.0"
 name = "stack-sizes"
+readme = "README.md"
 repository = "https://github.com/japaric/stack-sizes"
 version = "0.1.0"
 
+[[bin]]
+name = "stack-sizes"
+required-features = ["tools"]
+
+[[bin]]
+name = "stack-sizes-rustc"
+required-features = ["tools"]
+
+[[bin]]
+name = "cargo-stack-sizes"
+required-features = ["tools"]
+
 [dependencies]
 byteorder = "1.2.3"
-cargo-project = "0.1.0"
-clap = "2.32.0"
 either = "1.5.0"
 failure = "0.1.1"
 leb128 = "0.2.3"
-rustc-demangle = "0.1.8"
 xmas-elf = "0.6.2"
+
+[dependencies.cargo-project]
+version = "0.1.0"
+optional = true
+
+[dependencies.clap]
+version = "2.32.0"
+optional = true
+
+[dependencies.rustc-demangle]
+version = "0.1.8"
+optional = true
+
+[features]
+default = ["tools"]
+tools = ["cargo-project", "clap", "rustc-demangle"]
