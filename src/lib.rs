@@ -43,7 +43,7 @@ impl<'a, A> Function<'a, A> {
     }
 
     /// Returns the (mangled) name of the function
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'a str {
         self.name
     }
 
