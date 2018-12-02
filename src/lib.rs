@@ -29,8 +29,8 @@ use xmas_elf::{
 /// Information about a function
 pub struct Function<'a, A> {
     address: A,
-    name: &'a str,
-    stack: u64,
+    names: Vec<&'a str>,
+    stack: Option<u64>,
 }
 
 impl<'a, A> Function<'a, A> {
@@ -42,13 +42,13 @@ impl<'a, A> Function<'a, A> {
         self.address
     }
 
-    /// Returns the (mangled) name of the function
-    pub fn name(&self) -> &'a str {
-        self.name
+    /// Returns the (mangled) name of the function and its aliases
+    pub fn names(&self) -> &[&'a str] {
+        &self.names
     }
 
     /// Returns the stack usage of the function in bytes
-    pub fn stack(&self) -> u64 {
+    pub fn stack(&self) -> Option<u64> {
         self.stack
     }
 }
@@ -59,27 +59,28 @@ pub fn analyze(
 ) -> Result<Either<Vec<Function<u32>>, Vec<Function<u64>>>, failure::Error> {
     let elf = ElfFile::new(elf).map_err(failure::err_msg)?;
 
-    let mut names = HashMap::new();
+    // address -> [name]
+    let mut all_names = HashMap::new();
 
     if let Some(section) = elf.find_section_by_name(".symtab") {
         match section.get_data(&elf).map_err(failure::err_msg)? {
             SectionData::SymbolTable32(entries) => {
                 for entry in entries {
                     if entry.get_type() == Ok(Type::Func) {
-                        names.insert(
-                            entry.value(),
-                            entry.get_name(&elf).map_err(failure::err_msg)?,
-                        );
+                        all_names
+                            .entry(entry.value())
+                            .or_insert(vec![])
+                            .push(entry.get_name(&elf).map_err(failure::err_msg)?);
                     }
                 }
             }
             SectionData::SymbolTable64(entries) => {
                 for entry in entries {
                     if entry.get_type() == Ok(Type::Func) {
-                        names.insert(
-                            entry.value(),
-                            entry.get_name(&elf).map_err(failure::err_msg)?,
-                        );
+                        all_names
+                            .entry(entry.value())
+                            .or_insert(vec![])
+                            .push(entry.get_name(&elf).map_err(failure::err_msg)?);
                     }
                 }
             }
@@ -103,21 +104,29 @@ pub fn analyze(
                 let address = cursor.read_u32::<LE>()?;
                 // NOTE we also try the address plus one because this could be a function in Thumb
                 // mode
-                let name = names
-                    .get(&(address as u64))
-                    .or(names.get(&(address as u64 + 1)))
-                    .map(|s| *s)
-                    .unwrap_or("?");
-                let stack = leb128::read::unsigned(&mut cursor)?;
+                let names = all_names
+                    .remove(&(u64::from(address)))
+                    .or_else(|| all_names.remove(&(u64::from(address) + 1)))
+                    .unwrap_or(vec![]);
+                let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
                 funs.push(Function {
                     address,
                     stack,
-                    name,
+                    names,
                 });
             }
 
             funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+
+            // add functions for which we don't have stack size information
+            for (address, names) in all_names {
+                funs.push(Function {
+                    address: address as u32,
+                    stack: None,
+                    names,
+                });
+            }
 
             Ok(Either::Left(funs))
         }
@@ -128,21 +137,29 @@ pub fn analyze(
                 let address = cursor.read_u64::<LE>()?;
                 // NOTE we also try the address plus one because this could be a function in Thumb
                 // mode
-                let name = names
-                    .get(&address)
-                    .or(names.get(&(address + 1)))
-                    .map(|s| *s)
-                    .unwrap_or("?");
-                let stack = leb128::read::unsigned(&mut cursor)?;
+                let names = all_names
+                    .remove(&address)
+                    .or_else(|| all_names.remove(&(address + 1)))
+                    .unwrap_or(vec![]);
+                let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
                 funs.push(Function {
                     address,
                     stack,
-                    name,
+                    names,
                 });
             }
 
             funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+
+            // add functions for which we don't have stack size information
+            for (address, names) in all_names {
+                funs.push(Function {
+                    address,
+                    stack: None,
+                    names,
+                });
+            }
 
             Ok(Either::Right(funs))
         }
@@ -166,12 +183,14 @@ where
             println!("address\t\tstack\tname");
 
             for fun in funs {
-                println!(
-                    "{:#010x}\t{}\t{}",
-                    fun.address(),
-                    fun.stack(),
-                    rustc_demangle::demangle(fun.name())
-                );
+                if let (Some(name), Some(stack)) = (fun.names().first(), fun.stack()) {
+                    println!(
+                        "{:#010x}\t{}\t{}",
+                        fun.address(),
+                        stack,
+                        rustc_demangle::demangle(name)
+                    );
+                }
             }
         }
         Either::Right(funs) => {
@@ -179,12 +198,14 @@ where
             println!("address\t\t\tstack\tname");
 
             for fun in funs {
-                println!(
-                    "{:#018x}\t{}\t{}",
-                    fun.address(),
-                    fun.stack(),
-                    rustc_demangle::demangle(fun.name())
-                );
+                if let (Some(name), Some(stack)) = (fun.names().first(), fun.stack()) {
+                    println!(
+                        "{:#018x}\t{}\t{}",
+                        fun.address(),
+                        stack,
+                        rustc_demangle::demangle(name)
+                    );
+                }
             }
         }
     }
