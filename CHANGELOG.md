@@ -13,6 +13,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - `stack_sizes::analyze` does *not* error if the `.stack_sizes` section is
   missing.
 
+- `Function` now implements the `Debug` trait
+
 ## v0.2.0 - 2018-12-02
 
 ### Added

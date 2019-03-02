@@ -27,6 +27,7 @@ use xmas_elf::{
 };
 
 /// Information about a function
+#[derive(Debug)]
 pub struct Function<'a, A> {
     address: A,
     names: Vec<&'a str>,
