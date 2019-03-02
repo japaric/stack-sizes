@@ -62,29 +62,40 @@ pub fn analyze(
     // address -> [name]
     let mut all_names = HashMap::new();
 
+    let mut maybe_aliases = HashMap::new();
     if let Some(section) = elf.find_section_by_name(".symtab") {
         match section.get_data(&elf).map_err(failure::err_msg)? {
             SectionData::SymbolTable32(entries) => {
                 for entry in entries {
-                    if entry.get_type() == Ok(Type::Func) {
-                        all_names
-                            .entry(entry.value())
-                            .or_insert(vec![])
-                            .push(entry.get_name(&elf).map_err(failure::err_msg)?);
+                    let ty = entry.get_type();
+                    let value = entry.value();
+                    let name = entry.get_name(&elf).map_err(failure::err_msg)?;
+                    if ty == Ok(Type::Func) {
+                        all_names.entry(value).or_insert(vec![]).push(name);
+                    } else if ty == Ok(Type::NoType) {
+                        maybe_aliases.entry(value).or_insert(vec![]).push(name);
                     }
                 }
             }
             SectionData::SymbolTable64(entries) => {
                 for entry in entries {
-                    if entry.get_type() == Ok(Type::Func) {
-                        all_names
-                            .entry(entry.value())
-                            .or_insert(vec![])
-                            .push(entry.get_name(&elf).map_err(failure::err_msg)?);
+                    let ty = entry.get_type();
+                    let value = entry.value();
+                    let name = entry.get_name(&elf).map_err(failure::err_msg)?;
+                    if ty == Ok(Type::Func) {
+                        all_names.entry(value).or_insert(vec![]).push(name);
+                    } else if ty == Ok(Type::NoType) {
+                        maybe_aliases.entry(value).or_insert(vec![]).push(name);
                     }
                 }
             }
             _ => bail!("malformed .symtab section"),
+        }
+    }
+
+    for (value, alias) in maybe_aliases {
+        if let Some(names) = all_names.get_mut(&value) {
+            names.extend(alias);
         }
     }
 

@@ -5,6 +5,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `stack_sizes::analyze` now detects even more function aliases, specially ones
+  that has been created using linker scripts (see `PROVIDE`).
+
 ## v0.2.0 - 2018-12-02
 
 ### Added
