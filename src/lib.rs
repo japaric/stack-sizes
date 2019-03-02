@@ -63,6 +63,7 @@ pub fn analyze(
     let mut all_names = HashMap::new();
 
     let mut maybe_aliases = HashMap::new();
+    let mut is_64_bit = false;
     if let Some(section) = elf.find_section_by_name(".symtab") {
         match section.get_data(&elf).map_err(failure::err_msg)? {
             SectionData::SymbolTable32(entries) => {
@@ -78,6 +79,8 @@ pub fn analyze(
                 }
             }
             SectionData::SymbolTable64(entries) => {
+                is_64_bit = true;
+
                 for entry in entries {
                     let ty = entry.get_type();
                     let value = entry.value();
@@ -99,81 +102,101 @@ pub fn analyze(
         }
     }
 
-    let stack_sizes = elf
-        .find_section_by_name(".stack_sizes")
-        .ok_or_else(|| failure::err_msg(".stack_sizes section not found"))?;
+    if let Some(stack_sizes) = elf.find_section_by_name(".stack_sizes") {
+        let data = stack_sizes.raw_data(&elf);
+        let end = data.len() as u64;
+        let mut cursor = Cursor::new(data);
 
-    let data = stack_sizes.raw_data(&elf);
-    let end = data.len() as u64;
-    let mut cursor = Cursor::new(data);
+        match stack_sizes {
+            SectionHeader::Sh32(..) => {
+                let mut funs = vec![];
 
-    match stack_sizes {
-        SectionHeader::Sh32(..) => {
-            let mut funs = vec![];
+                while cursor.position() < end {
+                    let address = cursor.read_u32::<LE>()?;
+                    // NOTE we also try the address plus one because this could be a function in Thumb
+                    // mode
+                    let names = all_names
+                        .remove(&(u64::from(address)))
+                        .or_else(|| all_names.remove(&(u64::from(address) + 1)))
+                        .unwrap_or(vec![]);
+                    let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
-            while cursor.position() < end {
-                let address = cursor.read_u32::<LE>()?;
-                // NOTE we also try the address plus one because this could be a function in Thumb
-                // mode
-                let names = all_names
-                    .remove(&(u64::from(address)))
-                    .or_else(|| all_names.remove(&(u64::from(address) + 1)))
-                    .unwrap_or(vec![]);
-                let stack = Some(leb128::read::unsigned(&mut cursor)?);
+                    funs.push(Function {
+                        address,
+                        stack,
+                        names,
+                    });
+                }
 
-                funs.push(Function {
-                    address,
-                    stack,
-                    names,
-                });
+                funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+
+                // add functions for which we don't have stack size information
+                for (address, names) in all_names {
+                    funs.push(Function {
+                        address: address as u32,
+                        stack: None,
+                        names,
+                    });
+                }
+
+                Ok(Either::Left(funs))
             }
+            SectionHeader::Sh64(..) => {
+                let mut funs = vec![];
 
-            funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+                while cursor.position() < end {
+                    let address = cursor.read_u64::<LE>()?;
+                    // NOTE we also try the address plus one because this could be a function in Thumb
+                    // mode
+                    let names = all_names
+                        .remove(&address)
+                        .or_else(|| all_names.remove(&(address + 1)))
+                        .unwrap_or(vec![]);
+                    let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
-            // add functions for which we don't have stack size information
-            for (address, names) in all_names {
-                funs.push(Function {
+                    funs.push(Function {
+                        address,
+                        stack,
+                        names,
+                    });
+                }
+
+                funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+
+                // add functions for which we don't have stack size information
+                for (address, names) in all_names {
+                    funs.push(Function {
+                        address,
+                        stack: None,
+                        names,
+                    });
+                }
+
+                Ok(Either::Right(funs))
+            }
+        }
+    } else if is_64_bit {
+        Ok(Either::Right(
+            all_names
+                .into_iter()
+                .map(|(address, names)| Function {
+                    address,
+                    stack: None,
+                    names,
+                })
+                .collect(),
+        ))
+    } else {
+        Ok(Either::Left(
+            all_names
+                .into_iter()
+                .map(|(address, names)| Function {
                     address: address as u32,
                     stack: None,
                     names,
-                });
-            }
-
-            Ok(Either::Left(funs))
-        }
-        SectionHeader::Sh64(..) => {
-            let mut funs = vec![];
-
-            while cursor.position() < end {
-                let address = cursor.read_u64::<LE>()?;
-                // NOTE we also try the address plus one because this could be a function in Thumb
-                // mode
-                let names = all_names
-                    .remove(&address)
-                    .or_else(|| all_names.remove(&(address + 1)))
-                    .unwrap_or(vec![]);
-                let stack = Some(leb128::read::unsigned(&mut cursor)?);
-
-                funs.push(Function {
-                    address,
-                    stack,
-                    names,
-                });
-            }
-
-            funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
-
-            // add functions for which we don't have stack size information
-            for (address, names) in all_names {
-                funs.push(Function {
-                    address,
-                    stack: None,
-                    names,
-                });
-            }
-
-            Ok(Either::Right(funs))
-        }
+                })
+                .collect(),
+        ))
     }
 }
 

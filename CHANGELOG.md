@@ -10,6 +10,9 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - `stack_sizes::analyze` now detects even more function aliases, specially ones
   that has been created using linker scripts (see `PROVIDE`).
 
+- `stack_sizes::analyze` does *not* error if the `.stack_sizes` section is
+  missing.
+
 ## v0.2.0 - 2018-12-02
 
 ### Added
