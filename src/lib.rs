@@ -27,15 +27,18 @@ use xmas_elf::{
 };
 
 /// Information about a function
+#[derive(Debug)]
 pub struct Function<'a, A> {
-    address: A,
+    address: Option<A>,
     names: Vec<&'a str>,
     stack: Option<u64>,
 }
 
 impl<'a, A> Function<'a, A> {
     /// Returns the address of the function
-    pub fn address(&self) -> A
+    ///
+    /// A value of `None` indicates that this symbol is undefined (dynamically loaded)
+    pub fn address(&self) -> Option<A>
     where
         A: Copy,
     {
@@ -61,26 +64,43 @@ pub fn analyze(
 
     // address -> [name]
     let mut all_names = HashMap::new();
+    let mut undefs = vec![];
 
+    let mut maybe_aliases = HashMap::new();
+    let mut is_64_bit = false;
     if let Some(section) = elf.find_section_by_name(".symtab") {
         match section.get_data(&elf).map_err(failure::err_msg)? {
             SectionData::SymbolTable32(entries) => {
                 for entry in entries {
-                    if entry.get_type() == Ok(Type::Func) {
-                        all_names
-                            .entry(entry.value())
-                            .or_insert(vec![])
-                            .push(entry.get_name(&elf).map_err(failure::err_msg)?);
+                    let ty = entry.get_type();
+                    let value = entry.value();
+                    let name = entry.get_name(&elf).map_err(failure::err_msg)?;
+                    if ty == Ok(Type::Func) {
+                        if value == 0 && entry.size() == 0 {
+                            undefs.push(name);
+                        } else {
+                            all_names.entry(value).or_insert(vec![]).push(name);
+                        }
+                    } else if ty == Ok(Type::NoType) {
+                        maybe_aliases.entry(value).or_insert(vec![]).push(name);
                     }
                 }
             }
             SectionData::SymbolTable64(entries) => {
+                is_64_bit = true;
+
                 for entry in entries {
-                    if entry.get_type() == Ok(Type::Func) {
-                        all_names
-                            .entry(entry.value())
-                            .or_insert(vec![])
-                            .push(entry.get_name(&elf).map_err(failure::err_msg)?);
+                    let ty = entry.get_type();
+                    let value = entry.value();
+                    let name = entry.get_name(&elf).map_err(failure::err_msg)?;
+                    if ty == Ok(Type::Func) {
+                        if value == 0 && entry.size() == 0 {
+                            undefs.push(name);
+                        } else {
+                            all_names.entry(value).or_insert(vec![]).push(name);
+                        }
+                    } else if ty == Ok(Type::NoType) {
+                        maybe_aliases.entry(value).or_insert(vec![]).push(name);
                     }
                 }
             }
@@ -88,81 +108,139 @@ pub fn analyze(
         }
     }
 
-    let stack_sizes = elf
-        .find_section_by_name(".stack_sizes")
-        .ok_or_else(|| failure::err_msg(".stack_sizes section not found"))?;
-
-    let data = stack_sizes.raw_data(&elf);
-    let end = data.len() as u64;
-    let mut cursor = Cursor::new(data);
-
-    match stack_sizes {
-        SectionHeader::Sh32(..) => {
-            let mut funs = vec![];
-
-            while cursor.position() < end {
-                let address = cursor.read_u32::<LE>()?;
-                // NOTE we also try the address plus one because this could be a function in Thumb
-                // mode
-                let names = all_names
-                    .remove(&(u64::from(address)))
-                    .or_else(|| all_names.remove(&(u64::from(address) + 1)))
-                    .unwrap_or(vec![]);
-                let stack = Some(leb128::read::unsigned(&mut cursor)?);
-
-                funs.push(Function {
-                    address,
-                    stack,
-                    names,
-                });
-            }
-
-            funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
-
-            // add functions for which we don't have stack size information
-            for (address, names) in all_names {
-                funs.push(Function {
-                    address: address as u32,
-                    stack: None,
-                    names,
-                });
-            }
-
-            Ok(Either::Left(funs))
+    for (value, alias) in maybe_aliases {
+        if let Some(names) = all_names.get_mut(&value) {
+            names.extend(alias);
         }
-        SectionHeader::Sh64(..) => {
-            let mut funs = vec![];
+    }
 
-            while cursor.position() < end {
-                let address = cursor.read_u64::<LE>()?;
-                // NOTE we also try the address plus one because this could be a function in Thumb
-                // mode
-                let names = all_names
-                    .remove(&address)
-                    .or_else(|| all_names.remove(&(address + 1)))
-                    .unwrap_or(vec![]);
-                let stack = Some(leb128::read::unsigned(&mut cursor)?);
+    if let Some(stack_sizes) = elf.find_section_by_name(".stack_sizes") {
+        let data = stack_sizes.raw_data(&elf);
+        let end = data.len() as u64;
+        let mut cursor = Cursor::new(data);
 
-                funs.push(Function {
-                    address,
-                    stack,
-                    names,
-                });
+        match stack_sizes {
+            SectionHeader::Sh32(..) => {
+                let mut funs = vec![];
+
+                while cursor.position() < end {
+                    let address = cursor.read_u32::<LE>()?;
+                    // NOTE we also try the address plus one because this could be a function in Thumb
+                    // mode
+                    let names = all_names
+                        .remove(&(u64::from(address)))
+                        .or_else(|| all_names.remove(&(u64::from(address) + 1)))
+                        .unwrap_or(vec![]);
+                    let stack = Some(leb128::read::unsigned(&mut cursor)?);
+
+                    funs.push(Function {
+                        address: Some(address),
+                        stack,
+                        names,
+                    });
+                }
+
+                funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+
+                // add functions for which we don't have stack size information
+                for (address, names) in all_names {
+                    funs.push(Function {
+                        address: Some(address as u32),
+                        stack: None,
+                        names,
+                    });
+                }
+
+                if !undefs.is_empty() {
+                    funs.push(Function {
+                        address: None,
+                        stack: None,
+                        names: undefs,
+                    });
+                }
+
+                Ok(Either::Left(funs))
             }
+            SectionHeader::Sh64(..) => {
+                let mut funs = vec![];
 
-            funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+                while cursor.position() < end {
+                    let address = cursor.read_u64::<LE>()?;
+                    // NOTE we also try the address plus one because this could be a function in Thumb
+                    // mode
+                    let names = all_names
+                        .remove(&address)
+                        .or_else(|| all_names.remove(&(address + 1)))
+                        .unwrap_or(vec![]);
+                    let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
-            // add functions for which we don't have stack size information
-            for (address, names) in all_names {
-                funs.push(Function {
-                    address,
-                    stack: None,
-                    names,
-                });
+                    funs.push(Function {
+                        address: Some(address),
+                        stack,
+                        names,
+                    });
+                }
+
+                funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
+
+                // add functions for which we don't have stack size information
+                for (address, names) in all_names {
+                    funs.push(Function {
+                        address: Some(address),
+                        stack: None,
+                        names,
+                    });
+                }
+
+                if !undefs.is_empty() {
+                    funs.push(Function {
+                        address: None,
+                        stack: None,
+                        names: undefs,
+                    });
+                }
+
+                Ok(Either::Right(funs))
             }
-
-            Ok(Either::Right(funs))
         }
+    } else if is_64_bit {
+        let mut funs = all_names
+            .into_iter()
+            .map(|(address, names)| Function {
+                address: Some(address),
+                stack: None,
+                names,
+            })
+            .collect::<Vec<_>>();
+
+        if !undefs.is_empty() {
+            funs.push(Function {
+                address: None,
+                stack: None,
+                names: undefs,
+            });
+        }
+
+        Ok(Either::Right(funs))
+    } else {
+        let mut funs = all_names
+            .into_iter()
+            .map(|(address, names)| Function {
+                address: Some(address as u32),
+                stack: None,
+                names,
+            })
+            .collect::<Vec<_>>();
+
+        if !undefs.is_empty() {
+            funs.push(Function {
+                address: None,
+                stack: None,
+                names: undefs,
+            });
+        }
+
+        Ok(Either::Left(funs))
     }
 }
 
@@ -183,10 +261,12 @@ where
             println!("address\t\tstack\tname");
 
             for fun in funs {
-                if let (Some(name), Some(stack)) = (fun.names().first(), fun.stack()) {
+                if let (Some(name), Some(stack), Some(addr)) =
+                    (fun.names().first(), fun.stack(), fun.address())
+                {
                     println!(
                         "{:#010x}\t{}\t{}",
-                        fun.address(),
+                        addr,
                         stack,
                         rustc_demangle::demangle(name)
                     );
@@ -198,10 +278,12 @@ where
             println!("address\t\t\tstack\tname");
 
             for fun in funs {
-                if let (Some(name), Some(stack)) = (fun.names().first(), fun.stack()) {
+                if let (Some(name), Some(stack), Some(addr)) =
+                    (fun.names().first(), fun.stack(), fun.address())
+                {
                     println!(
                         "{:#018x}\t{}\t{}",
-                        fun.address(),
+                        addr,
                         stack,
                         rustc_demangle::demangle(name)
                     );

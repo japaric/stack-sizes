@@ -5,6 +5,23 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.3.0] - 2019-03-03
+
+### Changed
+
+- [breaking-change] `Function.address` now returns an `Option`.
+
+- `stack_sizes::analyze` now detects even more function aliases, specially ones
+  that has been created using linker scripts (see `PROVIDE`).
+
+- `stack_sizes::analyze` does *not* error if the `.stack_sizes` section is
+  missing.
+
+- `stack_sizes::analyze` now also reports undefined symbols (symbols that will
+  be loaded at runtime from a dynamic library); these have an address of `None`.
+
+- `Function` now implements the `Debug` trait
+
 ## v0.2.0 - 2018-12-02
 
 ### Added
@@ -33,6 +50,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 - Initial release
 
+[v0.3.0]: https://github.com/japaric/stack-sizes/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/japaric/stack-sizes/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/japaric/stack-sizes/compare/v0.1.0...v0.1.1
 [Unreleased]: https://github.com/japaric/stack-sizes/compare/v0.1.0...HEAD
