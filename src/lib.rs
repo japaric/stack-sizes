@@ -29,14 +29,16 @@ use xmas_elf::{
 /// Information about a function
 #[derive(Debug)]
 pub struct Function<'a, A> {
-    address: A,
+    address: Option<A>,
     names: Vec<&'a str>,
     stack: Option<u64>,
 }
 
 impl<'a, A> Function<'a, A> {
     /// Returns the address of the function
-    pub fn address(&self) -> A
+    ///
+    /// A value of `None` indicates that this symbol is undefined (dynamically loaded)
+    pub fn address(&self) -> Option<A>
     where
         A: Copy,
     {
@@ -62,6 +64,7 @@ pub fn analyze(
 
     // address -> [name]
     let mut all_names = HashMap::new();
+    let mut undefs = vec![];
 
     let mut maybe_aliases = HashMap::new();
     let mut is_64_bit = false;
@@ -73,7 +76,11 @@ pub fn analyze(
                     let value = entry.value();
                     let name = entry.get_name(&elf).map_err(failure::err_msg)?;
                     if ty == Ok(Type::Func) {
-                        all_names.entry(value).or_insert(vec![]).push(name);
+                        if value == 0 && entry.size() == 0 {
+                            undefs.push(name);
+                        } else {
+                            all_names.entry(value).or_insert(vec![]).push(name);
+                        }
                     } else if ty == Ok(Type::NoType) {
                         maybe_aliases.entry(value).or_insert(vec![]).push(name);
                     }
@@ -87,7 +94,11 @@ pub fn analyze(
                     let value = entry.value();
                     let name = entry.get_name(&elf).map_err(failure::err_msg)?;
                     if ty == Ok(Type::Func) {
-                        all_names.entry(value).or_insert(vec![]).push(name);
+                        if value == 0 && entry.size() == 0 {
+                            undefs.push(name);
+                        } else {
+                            all_names.entry(value).or_insert(vec![]).push(name);
+                        }
                     } else if ty == Ok(Type::NoType) {
                         maybe_aliases.entry(value).or_insert(vec![]).push(name);
                     }
@@ -123,7 +134,7 @@ pub fn analyze(
                     let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
                     funs.push(Function {
-                        address,
+                        address: Some(address),
                         stack,
                         names,
                     });
@@ -134,9 +145,17 @@ pub fn analyze(
                 // add functions for which we don't have stack size information
                 for (address, names) in all_names {
                     funs.push(Function {
-                        address: address as u32,
+                        address: Some(address as u32),
                         stack: None,
                         names,
+                    });
+                }
+
+                if !undefs.is_empty() {
+                    funs.push(Function {
+                        address: None,
+                        stack: None,
+                        names: undefs,
                     });
                 }
 
@@ -156,7 +175,7 @@ pub fn analyze(
                     let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
                     funs.push(Function {
-                        address,
+                        address: Some(address),
                         stack,
                         names,
                     });
@@ -167,9 +186,17 @@ pub fn analyze(
                 // add functions for which we don't have stack size information
                 for (address, names) in all_names {
                     funs.push(Function {
-                        address,
+                        address: Some(address),
                         stack: None,
                         names,
+                    });
+                }
+
+                if !undefs.is_empty() {
+                    funs.push(Function {
+                        address: None,
+                        stack: None,
+                        names: undefs,
                     });
                 }
 
@@ -177,27 +204,43 @@ pub fn analyze(
             }
         }
     } else if is_64_bit {
-        Ok(Either::Right(
-            all_names
-                .into_iter()
-                .map(|(address, names)| Function {
-                    address,
-                    stack: None,
-                    names,
-                })
-                .collect(),
-        ))
+        let mut funs = all_names
+            .into_iter()
+            .map(|(address, names)| Function {
+                address: Some(address),
+                stack: None,
+                names,
+            })
+            .collect::<Vec<_>>();
+
+        if !undefs.is_empty() {
+            funs.push(Function {
+                address: None,
+                stack: None,
+                names: undefs,
+            });
+        }
+
+        Ok(Either::Right(funs))
     } else {
-        Ok(Either::Left(
-            all_names
-                .into_iter()
-                .map(|(address, names)| Function {
-                    address: address as u32,
-                    stack: None,
-                    names,
-                })
-                .collect(),
-        ))
+        let mut funs = all_names
+            .into_iter()
+            .map(|(address, names)| Function {
+                address: Some(address as u32),
+                stack: None,
+                names,
+            })
+            .collect::<Vec<_>>();
+
+        if !undefs.is_empty() {
+            funs.push(Function {
+                address: None,
+                stack: None,
+                names: undefs,
+            });
+        }
+
+        Ok(Either::Left(funs))
     }
 }
 
@@ -218,10 +261,12 @@ where
             println!("address\t\tstack\tname");
 
             for fun in funs {
-                if let (Some(name), Some(stack)) = (fun.names().first(), fun.stack()) {
+                if let (Some(name), Some(stack), Some(addr)) =
+                    (fun.names().first(), fun.stack(), fun.address())
+                {
                     println!(
                         "{:#010x}\t{}\t{}",
-                        fun.address(),
+                        addr,
                         stack,
                         rustc_demangle::demangle(name)
                     );
@@ -233,10 +278,12 @@ where
             println!("address\t\t\tstack\tname");
 
             for fun in funs {
-                if let (Some(name), Some(stack)) = (fun.names().first(), fun.stack()) {
+                if let (Some(name), Some(stack), Some(addr)) =
+                    (fun.names().first(), fun.stack(), fun.address())
+                {
                     println!(
                         "{:#018x}\t{}\t{}",
-                        fun.address(),
+                        addr,
                         stack,
                         rustc_demangle::demangle(name)
                     );
