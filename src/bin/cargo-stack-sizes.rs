@@ -33,12 +33,14 @@ fn main() {
                 .takes_value(true)
                 .value_name("TRIPLE")
                 .help("Target triple for which the code is compiled"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("verbose")
                 .long("verbose")
                 .short("v")
                 .help("Use verbose output"),
-        ).arg(Arg::with_name("--").short("-").hidden_short_help(true))
+        )
+        .arg(Arg::with_name("--").short("-").hidden_short_help(true))
         .arg(Arg::with_name("args").multiple(true))
         .after_help(AFTER_HELP)
         .arg(
@@ -47,17 +49,20 @@ fn main() {
                 .takes_value(true)
                 .value_name("NAME")
                 .help("Build only the specified binary"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("example")
                 .long("example")
                 .takes_value(true)
                 .value_name("NAME")
                 .help("Build only the specified example"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("release")
                 .long("release")
                 .help("Build artifacts in release mode, with optimizations"),
-        ).get_matches();
+        )
+        .get_matches();
 
     match run(&matches) {
         Ok(ec) => process::exit(ec),

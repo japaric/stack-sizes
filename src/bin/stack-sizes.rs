@@ -5,7 +5,7 @@ extern crate stack_sizes;
 use clap::{App, Arg};
 
 const ABOUT: &str = "\
-Prints the stack usage of each function in an ELF file.";
+                     Prints the stack usage of each function in an ELF file.";
 
 fn main() {
     let matches = App::new("stack-sizes")
@@ -16,7 +16,8 @@ fn main() {
                 .help("ELF file to analyze")
                 .required(true)
                 .index(1),
-        ).get_matches();
+        )
+        .get_matches();
 
     let path = matches.value_of("ELF").unwrap();
 
