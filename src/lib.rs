@@ -31,6 +31,7 @@ use xmas_elf::{
 pub struct Function<'a, A> {
     address: Option<A>,
     names: Vec<&'a str>,
+    size: u64,
     stack: Option<u64>,
 }
 
@@ -50,6 +51,11 @@ impl<'a, A> Function<'a, A> {
         &self.names
     }
 
+    /// Returns the size of this subroutine in bytes
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
     /// Returns the stack usage of the function in bytes
     pub fn stack(&self) -> Option<u64> {
         self.stack
@@ -62,7 +68,7 @@ pub fn analyze(
 ) -> Result<Either<Vec<Function<u32>>, Vec<Function<u64>>>, failure::Error> {
     let elf = ElfFile::new(elf).map_err(failure::err_msg)?;
 
-    // address -> [name]
+    // address -> ([name], size)
     let mut all_names = HashMap::new();
     let mut undefs = vec![];
 
@@ -74,30 +80,41 @@ pub fn analyze(
                 for entry in entries {
                     let ty = entry.get_type();
                     let value = entry.value();
+                    let size = entry.size();
                     let name = entry.get_name(&elf).map_err(failure::err_msg)?;
                     if ty == Ok(Type::Func) {
-                        if value == 0 && entry.size() == 0 {
+                        if value == 0 && size == 0 {
                             undefs.push(name);
                         } else {
-                            all_names.entry(value).or_insert(vec![]).push(name);
+                            all_names
+                                .entry(value)
+                                .or_insert((vec![], size))
+                                .0
+                                .push(name);
                         }
                     } else if ty == Ok(Type::NoType) {
                         maybe_aliases.entry(value).or_insert(vec![]).push(name);
                     }
                 }
             }
+
             SectionData::SymbolTable64(entries) => {
                 is_64_bit = true;
 
                 for entry in entries {
                     let ty = entry.get_type();
                     let value = entry.value();
+                    let size = entry.size();
                     let name = entry.get_name(&elf).map_err(failure::err_msg)?;
                     if ty == Ok(Type::Func) {
-                        if value == 0 && entry.size() == 0 {
+                        if value == 0 && size == 0 {
                             undefs.push(name);
                         } else {
-                            all_names.entry(value).or_insert(vec![]).push(name);
+                            all_names
+                                .entry(value)
+                                .or_insert((vec![], size))
+                                .0
+                                .push(name);
                         }
                     } else if ty == Ok(Type::NoType) {
                         maybe_aliases.entry(value).or_insert(vec![]).push(name);
@@ -109,7 +126,7 @@ pub fn analyze(
     }
 
     for (value, alias) in maybe_aliases {
-        if let Some(names) = all_names.get_mut(&value) {
+        if let Some((names, _)) = all_names.get_mut(&value) {
             names.extend(alias);
         }
     }
@@ -127,27 +144,29 @@ pub fn analyze(
                     let address = cursor.read_u32::<LE>()?;
                     // NOTE we also try the address plus one because this could be a function in Thumb
                     // mode
-                    let names = all_names
+                    let (names, size) = all_names
                         .remove(&(u64::from(address)))
                         .or_else(|| all_names.remove(&(u64::from(address) + 1)))
-                        .unwrap_or(vec![]);
+                        .expect("UNREACHABLE");
                     let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
                     funs.push(Function {
                         address: Some(address),
                         stack,
                         names,
+                        size,
                     });
                 }
 
                 funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
 
                 // add functions for which we don't have stack size information
-                for (address, names) in all_names {
+                for (address, (names, size)) in all_names {
                     funs.push(Function {
                         address: Some(address as u32),
                         stack: None,
                         names,
+                        size,
                     });
                 }
 
@@ -156,6 +175,7 @@ pub fn analyze(
                         address: None,
                         stack: None,
                         names: undefs,
+                        size: 0,
                     });
                 }
 
@@ -168,27 +188,29 @@ pub fn analyze(
                     let address = cursor.read_u64::<LE>()?;
                     // NOTE we also try the address plus one because this could be a function in Thumb
                     // mode
-                    let names = all_names
+                    let (names, size) = all_names
                         .remove(&address)
                         .or_else(|| all_names.remove(&(address + 1)))
-                        .unwrap_or(vec![]);
+                        .expect("UNREACHABLE");
                     let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
                     funs.push(Function {
                         address: Some(address),
                         stack,
                         names,
+                        size,
                     });
                 }
 
                 funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
 
                 // add functions for which we don't have stack size information
-                for (address, names) in all_names {
+                for (address, (names, size)) in all_names {
                     funs.push(Function {
                         address: Some(address),
                         stack: None,
                         names,
+                        size,
                     });
                 }
 
@@ -197,6 +219,7 @@ pub fn analyze(
                         address: None,
                         stack: None,
                         names: undefs,
+                        size: 0,
                     });
                 }
 
@@ -206,10 +229,11 @@ pub fn analyze(
     } else if is_64_bit {
         let mut funs = all_names
             .into_iter()
-            .map(|(address, names)| Function {
+            .map(|(address, (names, size))| Function {
                 address: Some(address),
                 stack: None,
                 names,
+                size,
             })
             .collect::<Vec<_>>();
 
@@ -218,6 +242,7 @@ pub fn analyze(
                 address: None,
                 stack: None,
                 names: undefs,
+                size: 0,
             });
         }
 
@@ -225,10 +250,11 @@ pub fn analyze(
     } else {
         let mut funs = all_names
             .into_iter()
-            .map(|(address, names)| Function {
+            .map(|(address, (names, size))| Function {
                 address: Some(address as u32),
                 stack: None,
                 names,
+                size,
             })
             .collect::<Vec<_>>();
 
@@ -237,6 +263,7 @@ pub fn analyze(
                 address: None,
                 stack: None,
                 names: undefs,
+                size: 0,
             });
         }
 

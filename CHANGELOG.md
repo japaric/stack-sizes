@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `Function` now has a `size` method to get the size of the subroutine in bytes.
+
 ## [v0.3.0] - 2019-03-03
 
 ### Changed
