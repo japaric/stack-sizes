@@ -144,12 +144,13 @@ pub fn analyze(
                     let address = cursor.read_u32::<LE>()?;
                     // NOTE we also try the address plus one because this could be a function in Thumb
                     // mode
-                    let (names, size) = all_names
+                    let (mut names, size) = all_names
                         .remove(&(u64::from(address)))
                         .or_else(|| all_names.remove(&(u64::from(address) + 1)))
                         .expect("UNREACHABLE");
                     let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
+                    names.sort();
                     funs.push(Function {
                         address: Some(address),
                         stack,
@@ -161,7 +162,9 @@ pub fn analyze(
                 funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
 
                 // add functions for which we don't have stack size information
-                for (address, (names, size)) in all_names {
+                for (address, (mut names, size)) in all_names {
+                    names.sort();
+
                     funs.push(Function {
                         address: Some(address as u32),
                         stack: None,
@@ -188,12 +191,13 @@ pub fn analyze(
                     let address = cursor.read_u64::<LE>()?;
                     // NOTE we also try the address plus one because this could be a function in Thumb
                     // mode
-                    let (names, size) = all_names
+                    let (mut names, size) = all_names
                         .remove(&address)
                         .or_else(|| all_names.remove(&(address + 1)))
                         .expect("UNREACHABLE");
                     let stack = Some(leb128::read::unsigned(&mut cursor)?);
 
+                    names.sort();
                     funs.push(Function {
                         address: Some(address),
                         stack,
@@ -205,7 +209,9 @@ pub fn analyze(
                 funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
 
                 // add functions for which we don't have stack size information
-                for (address, (names, size)) in all_names {
+                for (address, (mut names, size)) in all_names {
+                    names.sort();
+
                     funs.push(Function {
                         address: Some(address),
                         stack: None,
@@ -229,11 +235,15 @@ pub fn analyze(
     } else if is_64_bit {
         let mut funs = all_names
             .into_iter()
-            .map(|(address, (names, size))| Function {
-                address: Some(address),
-                stack: None,
-                names,
-                size,
+            .map(|(address, (mut names, size))| {
+                names.sort();
+
+                Function {
+                    address: Some(address),
+                    stack: None,
+                    names,
+                    size,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -250,11 +260,14 @@ pub fn analyze(
     } else {
         let mut funs = all_names
             .into_iter()
-            .map(|(address, (names, size))| Function {
-                address: Some(address as u32),
-                stack: None,
-                names,
-                size,
+            .map(|(address, (mut names, size))| {
+                names.sort();
+                Function {
+                    address: Some(address as u32),
+                    stack: None,
+                    names,
+                    size,
+                }
             })
             .collect::<Vec<_>>();
 
