@@ -1,16 +1,14 @@
-extern crate cargo_project;
-extern crate clap;
-#[macro_use]
-extern crate failure;
-extern crate stack_sizes;
-
 use std::{
-    env,
+    env, fs,
     process::{self, Command},
+    time::SystemTime,
 };
 
 use cargo_project::{Artifact, Profile, Project};
 use clap::{App, AppSettings, Arg, ArgMatches};
+use failure::bail;
+use filetime::FileTime;
+use walkdir::WalkDir;
 
 const ABOUT: &str = "Builds a Cargo project and prints the stack usage of each function";
 
@@ -71,10 +69,12 @@ fn main() {
 }
 
 fn run(matches: &ArgMatches) -> Result<i32, failure::Error> {
-    let artifact = if let Some(bin) = matches.value_of("bin") {
-        Artifact::Bin(bin)
+    let mut is_binary = false;
+    let (krate, artifact) = if let Some(bin) = matches.value_of("bin") {
+        is_binary = true;
+        (bin, Artifact::Bin(bin))
     } else if let Some(example) = matches.value_of("example") {
-        Artifact::Example(example)
+        (example, Artifact::Example(example))
     } else {
         bail!("One of `--bin` or `--example` must be specified")
     };
@@ -113,7 +113,7 @@ fn run(matches: &ArgMatches) -> Result<i32, failure::Error> {
         cargo.arg("--release");
     }
 
-    cargo.arg("--");
+    cargo.args(&["--", "-C", "lto", "--emit=obj", "-Z", "emit-stack-sizes"]);
     if let Some(arg) = matches.value_of("--") {
         cargo.arg(arg);
     }
@@ -122,10 +122,29 @@ fn run(matches: &ArgMatches) -> Result<i32, failure::Error> {
         cargo.args(args);
     }
 
-    cargo.env("RUSTC", "stack-sizes-rustc");
+    // "touch" some source file to trigger a rebuild
+    let root = project.toml().parent().expect("UNREACHABLE");
+    let now = FileTime::from_system_time(SystemTime::now());
+    if !filetime::set_file_times(root.join("src/main.rs"), now, now).is_ok() {
+        if !filetime::set_file_times(root.join("src/lib.rs"), now, now).is_ok() {
+            // look for some rust source file and "touch" it
+            let src = root.join("src");
+            let haystack = if src.exists() { &src } else { root };
+
+            for entry in WalkDir::new(haystack) {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.extension().map(|ext| ext == "rs").unwrap_or(false) {
+                    filetime::set_file_times(path, now, now)?;
+                    break;
+                }
+            }
+        }
+    }
 
     if verbose {
-        eprintln!("RUSTC=stack-sizes-rustc {:?}", cargo);
+        eprintln!("{:?}", cargo);
     }
 
     let status = cargo.status()?;
@@ -134,13 +153,48 @@ fn run(matches: &ArgMatches) -> Result<i32, failure::Error> {
         return Ok(status.code().unwrap_or(101));
     }
 
-    let path = project.path(artifact, profile, target);
+    let meta = rustc_version::version_meta()?;
+    let host = meta.host;
+    let path = project.path(artifact, profile, target, &host)?;
 
-    if verbose {
-        eprintln!("\"stack-sizes\" \"{}\"", path.display());
+    // find the object file
+    let mut obj = None;
+    // Most Recently Modified
+    let mut mrm = SystemTime::UNIX_EPOCH;
+    let prefix = format!("{}-", krate.replace('-', "_"));
+
+    let mut dir = path.parent().expect("unreachable").to_path_buf();
+
+    if is_binary {
+        dir = dir.join("deps"); // the .ll file is placed in ../deps
     }
 
-    stack_sizes::run(path)?;
+    for e in fs::read_dir(dir)? {
+        let e = e?;
+        let p = e.path();
+
+        if p.extension().map(|e| e == "o").unwrap_or(false) {
+            if p.file_stem()
+                .expect("unreachable")
+                .to_str()
+                .expect("unreachable")
+                .starts_with(&prefix)
+            {
+                let modified = e.metadata()?.modified()?;
+                if obj.is_none() {
+                    obj = Some(p);
+                    mrm = modified;
+                } else {
+                    if modified > mrm {
+                        obj = Some(p);
+                        mrm = modified;
+                    }
+                }
+            }
+        }
+    }
+
+    stack_sizes::run_exec(&path, &obj.expect("unreachable"))?;
 
     Ok(0)
 }

@@ -2,50 +2,51 @@
 //!
 //! [`.stack_sizes`]: https://llvm.org/docs/CodeGenerator.html#emitting-function-stack-size-information
 
+#![deny(rust_2018_idioms)]
 #![deny(missing_docs)]
 #![deny(warnings)]
 
-extern crate byteorder;
-extern crate either;
 #[macro_use]
 extern crate failure;
-extern crate leb128;
-#[cfg(feature = "tools")]
-extern crate rustc_demangle;
-extern crate xmas_elf;
 
-use std::{collections::HashMap, io::Cursor, u32};
+use core::u16;
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    io::Cursor,
+};
 #[cfg(feature = "tools")]
-use std::{fs::File, io::Read, path::Path};
+use std::{fs, path::Path};
 
 use byteorder::{ReadBytesExt, LE};
-use either::Either;
 use xmas_elf::{
-    sections::{SectionData, SectionHeader},
+    header,
+    sections::SectionData,
     symbol_table::{Entry, Type},
     ElfFile,
 };
 
-/// Information about a function
-#[derive(Debug)]
-pub struct Function<'a, A> {
-    address: Option<A>,
+/// Functions found after analyzing an executable
+#[derive(Clone, Debug)]
+pub struct Functions<'a> {
+    /// Whether the addresses of these functions are 32-bit or 64-bit
+    pub have_32_bit_addresses: bool,
+
+    /// "undefined" symbols, symbols that need to be dynamically loaded
+    pub undefined: HashSet<&'a str>,
+
+    /// "defined" symbols, symbols with known locations (addresses)
+    pub defined: BTreeMap<u64, Function<'a>>,
+}
+
+/// A symbol that represents a function (subroutine)
+#[derive(Clone, Debug)]
+pub struct Function<'a> {
     names: Vec<&'a str>,
     size: u64,
     stack: Option<u64>,
 }
 
-impl<'a, A> Function<'a, A> {
-    /// Returns the address of the function
-    ///
-    /// A value of `None` indicates that this symbol is undefined (dynamically loaded)
-    pub fn address(&self) -> Option<A>
-    where
-        A: Copy,
-    {
-        self.address
-    }
-
+impl<'a> Function<'a> {
     /// Returns the (mangled) name of the function and its aliases
     pub fn names(&self) -> &[&'a str] {
         &self.names
@@ -62,248 +63,356 @@ impl<'a, A> Function<'a, A> {
     }
 }
 
-/// Parses an ELF file and returns a list of functions and their stack usage
-pub fn analyze(
-    elf: &[u8],
-) -> Result<Either<Vec<Function<u32>>, Vec<Function<u64>>>, failure::Error> {
-    let elf = ElfFile::new(elf).map_err(failure::err_msg)?;
+// is this symbol a tag used to delimit code / data sections within a subroutine?
+fn is_tag(name: &str) -> bool {
+    name == "$a" || name == "$t" || name == "$d" || {
+        (name.starts_with("$a.") || name.starts_with("$d.") || name.starts_with("$t."))
+            && name.splitn(2, '.').nth(1).unwrap().parse::<u64>().is_ok()
+    }
+}
 
-    // address -> ([name], size)
-    let mut all_names = HashMap::new();
-    let mut undefs = vec![];
+fn process_symtab_obj<'a, E>(
+    entries: &'a [E],
+    elf: &ElfFile<'a>,
+) -> Result<
+    (
+        BTreeMap<u16, BTreeMap<u64, HashSet<&'a str>>>,
+        BTreeMap<u32, u16>,
+    ),
+    failure::Error,
+>
+where
+    E: Entry,
+{
+    let mut names: BTreeMap<_, BTreeMap<_, HashSet<_>>> = BTreeMap::new();
+    let mut shndxs = BTreeMap::new();
 
-    let mut maybe_aliases = HashMap::new();
+    for (entry, i) in entries.iter().zip(0..) {
+        let name = entry.get_name(elf);
+        let shndx = entry.shndx();
+        let addr = entry.value() & !1; // clear the thumb bit
+        let ty = entry.get_type();
+
+        if shndx != 0 {
+            shndxs.insert(i, shndx);
+        }
+
+        if ty == Ok(Type::Func)
+            || (ty == Ok(Type::NoType)
+                && name
+                    .map(|name| !name.is_empty() && !is_tag(name))
+                    .unwrap_or(false))
+        {
+            let name = name.map_err(failure::err_msg)?;
+
+            names
+                .entry(shndx)
+                .or_default()
+                .entry(addr)
+                .or_default()
+                .insert(name);
+        }
+    }
+
+    Ok((names, shndxs))
+}
+
+/// Parses an *input* (AKA relocatable) object file (`.o`) and returns a list of symbols and their
+/// stack usage
+pub fn analyze_object(obj: &[u8]) -> Result<HashMap<&str, u64>, failure::Error> {
+    let elf = &ElfFile::new(obj).map_err(failure::err_msg)?;
+
+    if elf.header.pt2.type_().as_type() != header::Type::Relocatable {
+        bail!("object file is not relocatable")
+    }
+
+    // shndx -> (address -> [symbol-name])
     let mut is_64_bit = false;
-    if let Some(section) = elf.find_section_by_name(".symtab") {
-        match section.get_data(&elf).map_err(failure::err_msg)? {
-            SectionData::SymbolTable32(entries) => {
-                for entry in entries {
-                    let ty = entry.get_type();
-                    let value = entry.value();
-                    let size = entry.size();
-                    let name = entry.get_name(&elf).map_err(failure::err_msg)?;
-                    if ty == Ok(Type::Func) {
-                        if value == 0 && size == 0 {
-                            undefs.push(name);
-                        } else {
-                            all_names
-                                .entry(value)
-                                .or_insert((vec![], size))
-                                .0
-                                .push(name);
-                        }
-                    } else if ty == Ok(Type::NoType) {
-                        maybe_aliases.entry(value).or_insert(vec![]).push(name);
-                    }
-                }
+    let (shndx2names, symtab2shndx) = match elf
+        .find_section_by_name(".symtab")
+        .ok_or_else(|| failure::err_msg("`.symtab` section not found"))?
+        .get_data(elf)
+    {
+        Ok(SectionData::SymbolTable32(entries)) => process_symtab_obj(entries, elf)?,
+
+        Ok(SectionData::SymbolTable64(entries)) => {
+            is_64_bit = true;
+            process_symtab_obj(entries, elf)?
+        }
+
+        _ => bail!("malformed .symtab section"),
+    };
+
+    let mut sizes = HashMap::new();
+    let mut sections = elf.section_iter();
+    while let Some(section) = sections.next() {
+        if section.get_name(elf) == Ok(".stack_sizes") {
+            let mut stack_sizes = Cursor::new(section.raw_data(elf));
+
+            // next section should be `.rel.stack_sizes` or `.rela.stack_sizes`
+            // XXX should we check the section name?
+            let relocs: Vec<_> = match sections
+                .next()
+                .and_then(|section| section.get_data(elf).ok())
+            {
+                Some(SectionData::Rel32(rels)) if !is_64_bit => rels
+                    .iter()
+                    .map(|rel| rel.get_symbol_table_index())
+                    .collect(),
+
+                Some(SectionData::Rela32(relas)) if !is_64_bit => relas
+                    .iter()
+                    .map(|rel| rel.get_symbol_table_index())
+                    .collect(),
+
+                Some(SectionData::Rel64(rels)) if is_64_bit => rels
+                    .iter()
+                    .map(|rel| rel.get_symbol_table_index())
+                    .collect(),
+
+                Some(SectionData::Rela64(relas)) if is_64_bit => relas
+                    .iter()
+                    .map(|rel| rel.get_symbol_table_index())
+                    .collect(),
+
+                _ => bail!("expected a section with relocation information after `.stack_sizes`"),
+            };
+
+            for index in relocs {
+                let addr = if is_64_bit {
+                    stack_sizes.read_u64::<LE>()?
+                } else {
+                    u64::from(stack_sizes.read_u32::<LE>()?)
+                };
+                let stack = leb128::read::unsigned(&mut stack_sizes).unwrap();
+
+                let shndx = symtab2shndx[&index];
+                let entries = shndx2names
+                    .get(&(shndx as u16))
+                    .unwrap_or_else(|| panic!("section header with index {} not found", shndx));
+
+                assert!(sizes
+                    .insert(
+                        *entries
+                            .get(&addr)
+                            .unwrap_or_else(|| panic!(
+                                "symbol with address {} not found at section {} ({:?})",
+                                addr, shndx, entries
+                            ))
+                            .iter()
+                            .next()
+                            .unwrap(),
+                        stack
+                    )
+                    .is_none());
             }
 
-            SectionData::SymbolTable64(entries) => {
-                is_64_bit = true;
+            if stack_sizes.position() != stack_sizes.get_ref().len() as u64 {
+                bail!(
+                    "the number of relocations doesn't match the number of `.stack_sizes` entries"
+                );
+            }
+        }
+    }
 
-                for entry in entries {
-                    let ty = entry.get_type();
-                    let value = entry.value();
-                    let size = entry.size();
-                    let name = entry.get_name(&elf).map_err(failure::err_msg)?;
-                    if ty == Ok(Type::Func) {
-                        if value == 0 && size == 0 {
-                            undefs.push(name);
-                        } else {
-                            all_names
-                                .entry(value)
-                                .or_insert((vec![], size))
-                                .0
-                                .push(name);
-                        }
-                    } else if ty == Ok(Type::NoType) {
-                        maybe_aliases.entry(value).or_insert(vec![]).push(name);
-                    }
+    Ok(sizes)
+}
+
+fn process_symtab_exec<'a, E>(
+    entries: &'a [E],
+    elf: &ElfFile<'a>,
+) -> Result<(HashSet<&'a str>, BTreeMap<u64, Function<'a>>), failure::Error>
+where
+    E: Entry + core::fmt::Debug,
+{
+    let mut defined = BTreeMap::new();
+    let mut maybe_aliases = BTreeMap::new();
+    let mut undefined = HashSet::new();
+
+    for entry in entries {
+        let ty = entry.get_type();
+        let value = entry.value();
+        let size = entry.size();
+        let name = entry.get_name(&elf);
+
+        if ty == Ok(Type::Func) {
+            let name = name.map_err(failure::err_msg)?;
+
+            if value == 0 && size == 0 {
+                undefined.insert(name);
+            } else {
+                defined
+                    .entry(value)
+                    .or_insert(Function {
+                        names: vec![],
+                        size,
+                        stack: None,
+                    })
+                    .names
+                    .push(name);
+            }
+        } else if ty == Ok(Type::NoType) {
+            if let Ok(name) = name {
+                if !is_tag(name) {
+                    maybe_aliases.entry(value).or_insert(vec![]).push(name);
                 }
             }
-            _ => bail!("malformed .symtab section"),
         }
     }
 
     for (value, alias) in maybe_aliases {
-        if let Some((names, _)) = all_names.get_mut(&value) {
-            names.extend(alias);
+        // try with the thumb bit both set and clear
+        if let Some(sym) = defined.get_mut(&(value | 1)) {
+            sym.names.extend(alias);
+        } else if let Some(sym) = defined.get_mut(&(value & !1)) {
+            sym.names.extend(alias);
         }
     }
 
+    Ok((undefined, defined))
+}
+
+/// Parses an executable ELF file and returns a list of functions and their stack usage
+pub fn analyze_executable(elf: &[u8]) -> Result<Functions<'_>, failure::Error> {
+    let elf = &ElfFile::new(elf).map_err(failure::err_msg)?;
+
+    let mut have_32_bit_addresses = false;
+    let (undefined, mut defined) = if let Some(section) = elf.find_section_by_name(".symtab") {
+        match section.get_data(elf).map_err(failure::err_msg)? {
+            SectionData::SymbolTable32(entries) => {
+                have_32_bit_addresses = true;
+
+                process_symtab_exec(entries, elf)?
+            }
+
+            SectionData::SymbolTable64(entries) => process_symtab_exec(entries, elf)?,
+            _ => bail!("malformed .symtab section"),
+        }
+    } else {
+        (HashSet::new(), BTreeMap::new())
+    };
+
     if let Some(stack_sizes) = elf.find_section_by_name(".stack_sizes") {
-        let data = stack_sizes.raw_data(&elf);
+        let data = stack_sizes.raw_data(elf);
         let end = data.len() as u64;
         let mut cursor = Cursor::new(data);
 
-        match stack_sizes {
-            SectionHeader::Sh32(..) => {
-                let mut funs = vec![];
+        while cursor.position() < end {
+            let address = if have_32_bit_addresses {
+                u64::from(cursor.read_u32::<LE>()?)
+            } else {
+                cursor.read_u64::<LE>()?
+            };
+            let stack = leb128::read::unsigned(&mut cursor)?;
 
-                while cursor.position() < end {
-                    let address = cursor.read_u32::<LE>()?;
-                    // NOTE we also try the address plus one because this could be a function in Thumb
-                    // mode
-                    let (mut names, size) = all_names
-                        .remove(&(u64::from(address)))
-                        .or_else(|| all_names.remove(&(u64::from(address) + 1)))
-                        .expect("UNREACHABLE");
-                    let stack = Some(leb128::read::unsigned(&mut cursor)?);
-
-                    names.sort();
-                    funs.push(Function {
-                        address: Some(address),
-                        stack,
-                        names,
-                        size,
-                    });
-                }
-
-                funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
-
-                // add functions for which we don't have stack size information
-                for (address, (mut names, size)) in all_names {
-                    names.sort();
-
-                    funs.push(Function {
-                        address: Some(address as u32),
-                        stack: None,
-                        names,
-                        size,
-                    });
-                }
-
-                if !undefs.is_empty() {
-                    funs.push(Function {
-                        address: None,
-                        stack: None,
-                        names: undefs,
-                        size: 0,
-                    });
-                }
-
-                Ok(Either::Left(funs))
-            }
-            SectionHeader::Sh64(..) => {
-                let mut funs = vec![];
-
-                while cursor.position() < end {
-                    let address = cursor.read_u64::<LE>()?;
-                    // NOTE we also try the address plus one because this could be a function in Thumb
-                    // mode
-                    let (mut names, size) = all_names
-                        .remove(&address)
-                        .or_else(|| all_names.remove(&(address + 1)))
-                        .expect("UNREACHABLE");
-                    let stack = Some(leb128::read::unsigned(&mut cursor)?);
-
-                    names.sort();
-                    funs.push(Function {
-                        address: Some(address),
-                        stack,
-                        names,
-                        size,
-                    });
-                }
-
-                funs.sort_by(|a, b| b.stack().cmp(&a.stack()));
-
-                // add functions for which we don't have stack size information
-                for (address, (mut names, size)) in all_names {
-                    names.sort();
-
-                    funs.push(Function {
-                        address: Some(address),
-                        stack: None,
-                        names,
-                        size,
-                    });
-                }
-
-                if !undefs.is_empty() {
-                    funs.push(Function {
-                        address: None,
-                        stack: None,
-                        names: undefs,
-                        size: 0,
-                    });
-                }
-
-                Ok(Either::Right(funs))
+            // NOTE try with the thumb bit both set and clear
+            if let Some(sym) = defined.get_mut(&(address | 1)) {
+                sym.stack = Some(stack);
+            } else if let Some(sym) = defined.get_mut(&(address & !1)) {
+                sym.stack = Some(stack);
+            } else {
+                unreachable!()
             }
         }
-    } else if is_64_bit {
-        let mut funs = all_names
-            .into_iter()
-            .map(|(address, (mut names, size))| {
-                names.sort();
-
-                Function {
-                    address: Some(address),
-                    stack: None,
-                    names,
-                    size,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if !undefs.is_empty() {
-            funs.push(Function {
-                address: None,
-                stack: None,
-                names: undefs,
-                size: 0,
-            });
-        }
-
-        Ok(Either::Right(funs))
-    } else {
-        let mut funs = all_names
-            .into_iter()
-            .map(|(address, (mut names, size))| {
-                names.sort();
-                Function {
-                    address: Some(address as u32),
-                    stack: None,
-                    names,
-                    size,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if !undefs.is_empty() {
-            funs.push(Function {
-                address: None,
-                stack: None,
-                names: undefs,
-                size: 0,
-            });
-        }
-
-        Ok(Either::Left(funs))
     }
+
+    Ok(Functions {
+        have_32_bit_addresses,
+        defined,
+        undefined,
+    })
 }
 
 #[cfg(feature = "tools")]
 #[doc(hidden)]
-pub fn run<P>(path: P) -> Result<(), failure::Error>
-where
-    P: AsRef<Path>,
-{
-    let mut bytes = vec![];
-    File::open(path)?.read_to_end(&mut bytes)?;
+pub fn run_exec(exec: &Path, obj: &Path) -> Result<(), failure::Error> {
+    let exec = &fs::read(exec)?;
+    let obj = &fs::read(obj)?;
 
-    let funs = analyze(&bytes)?;
+    let stack_sizes = analyze_object(obj)?;
+    let symbols = analyze_executable(exec)?;
 
-    match funs {
-        Either::Left(funs) => {
+    if symbols.have_32_bit_addresses {
+        // 32-bit address space
+        println!("address\t\tstack\tname");
+
+        for (addr, sym) in symbols.defined {
+            let stack = sym
+                .names()
+                .iter()
+                .filter_map(|name| stack_sizes.get(name))
+                .next();
+
+            if let (Some(name), Some(stack)) = (sym.names().first(), stack) {
+                println!(
+                    "{:#010x}\t{}\t{}",
+                    addr,
+                    stack,
+                    rustc_demangle::demangle(name)
+                );
+            }
+        }
+    } else {
+        // 64-bit address space
+        println!("address\t\t\tstack\tname");
+
+        for (addr, sym) in symbols.defined {
+            let stack = sym
+                .names()
+                .iter()
+                .filter_map(|name| stack_sizes.get(name))
+                .next();
+
+            if let (Some(name), Some(stack)) = (sym.names().first(), stack) {
+                println!(
+                    "{:#018x}\t{}\t{}",
+                    addr,
+                    stack,
+                    rustc_demangle::demangle(name)
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "tools")]
+#[doc(hidden)]
+pub fn run(path: &Path) -> Result<(), failure::Error> {
+    let bytes = &fs::read(path)?;
+    let elf = &ElfFile::new(bytes).map_err(failure::err_msg)?;
+
+    if elf.header.pt2.type_().as_type() == header::Type::Relocatable {
+        let symbols = analyze_object(bytes)?;
+
+        if symbols.is_empty() {
+            bail!("this object file contains no stack usage information");
+        }
+
+        println!("stack\tname");
+        for (name, stack) in symbols {
+            println!("{}\t{}", stack, rustc_demangle::demangle(name));
+        }
+
+        Ok(())
+    } else {
+        let symbols = analyze_executable(bytes)?;
+
+        if symbols
+            .defined
+            .values()
+            .all(|symbol| symbol.stack().is_none())
+        {
+            bail!("this executable contains no stack usage information");
+        }
+
+        if symbols.have_32_bit_addresses {
             // 32-bit address space
             println!("address\t\tstack\tname");
 
-            for fun in funs {
-                if let (Some(name), Some(stack), Some(addr)) =
-                    (fun.names().first(), fun.stack(), fun.address())
-                {
+            for (addr, sym) in symbols.defined {
+                if let (Some(name), Some(stack)) = (sym.names().first(), sym.stack()) {
                     println!(
                         "{:#010x}\t{}\t{}",
                         addr,
@@ -312,15 +421,12 @@ where
                     );
                 }
             }
-        }
-        Either::Right(funs) => {
+        } else {
             // 64-bit address space
             println!("address\t\t\tstack\tname");
 
-            for fun in funs {
-                if let (Some(name), Some(stack), Some(addr)) =
-                    (fun.names().first(), fun.stack(), fun.address())
-                {
+            for (addr, sym) in symbols.defined {
+                if let (Some(name), Some(stack)) = (sym.names().first(), sym.stack()) {
                     println!(
                         "{:#018x}\t{}\t{}",
                         addr,
@@ -330,7 +436,7 @@ where
                 }
             }
         }
-    }
 
-    Ok(())
+        Ok(())
+    }
 }

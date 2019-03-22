@@ -1,11 +1,8 @@
-extern crate clap;
-extern crate failure;
-extern crate stack_sizes;
+use std::path::Path;
 
 use clap::{App, Arg};
 
-const ABOUT: &str = "\
-                     Prints the stack usage of each function in an ELF file.";
+const ABOUT: &str = "Prints the stack usage of each function in an ELF file.";
 
 fn main() {
     let matches = App::new("stack-sizes")
@@ -21,7 +18,7 @@ fn main() {
 
     let path = matches.value_of("ELF").unwrap();
 
-    if let Err(e) = stack_sizes::run(&path) {
+    if let Err(e) = stack_sizes::run(Path::new(path)) {
         eprintln!("error: {}", e);
     }
 }
