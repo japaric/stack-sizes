@@ -3,19 +3,16 @@ authors = ["Jorge Aparicio <jorge@japaric.io>"]
 categories = ["command-line-utilities"]
 description = "Tools to print stack usage information emitted by LLVM in human readable format"
 documentation = "https://docs.rs/stack-sizes"
+edition = "2018"
 keywords = ["stack", "usage", "analysis"]
 license = "MIT OR Apache-2.0"
 name = "stack-sizes"
 readme = "README.md"
 repository = "https://github.com/japaric/stack-sizes"
-version = "0.3.1"
+version = "0.4.0"
 
 [[bin]]
 name = "stack-sizes"
-required-features = ["tools"]
-
-[[bin]]
-name = "stack-sizes-rustc"
 required-features = ["tools"]
 
 [[bin]]
@@ -24,23 +21,34 @@ required-features = ["tools"]
 
 [dependencies]
 byteorder = "1.2.3"
-either = "1.5.0"
 failure = "0.1.1"
 leb128 = "0.2.3"
 xmas-elf = "0.6.2"
 
 [dependencies.cargo-project]
-version = "0.1.0"
+version = "0.2.2"
 optional = true
 
 [dependencies.clap]
 version = "2.32.0"
 optional = true
 
+[dependencies.filetime]
+version = "0.2.4"
+optional = true
+
 [dependencies.rustc-demangle]
 version = "0.1.8"
 optional = true
 
+[dependencies.rustc_version]
+version = "0.2.3"
+optional = true
+
+[dependencies.walkdir]
+version = "2.2.7"
+optional = true
+
 [features]
 default = ["tools"]
-tools = ["cargo-project", "clap", "rustc-demangle"]
+tools = ["cargo-project", "clap", "filetime", "rustc-demangle", "rustc_version", "walkdir"]

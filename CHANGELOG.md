@@ -5,7 +5,35 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-## [v0.3.1] - 2018-03-10
+## [v0.4.0] - 2019-03-22
+
+### Added
+
+- A `stack_sizes::analyze_object` function has been added. This function is
+  geared towards analyzing relocatable object (`.o`) files.
+
+### Changed
+
+- [breaking-change] `stack_sizes::analyze` has been renamed to
+  `stack_sizes::analyze_executable` and its returns type has changed to
+  `Functions`.
+
+- `analyze_executable` no longer includes tags like `$a.1`, `$d.2` and `$t.3` in
+  the list of aliases of a function.
+
+- [breaking-change] `Function` no longer provides an `address` method and it's
+  no longer a generic struct .
+
+- the `stack-sizes-rustc` binary, which was an implementation detail of
+  `cargo-stack-sizes`, has been removed.
+
+- The `stack-sizes` tool can now analyze relocatable object (`.o`) files.
+
+- `cargo-stack-sizes` now always forces a rebuild -- the Cargo caching behavior
+  makes it hard to locate the object file that contains the stack usage
+  information.
+
+## [v0.3.1] - 2019-03-10
 
 ### Added
 
@@ -56,7 +84,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 - Initial release
 
-[Unreleased]: https://github.com/japaric/stack-sizes/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/japaric/stack-sizes/compare/v0.4.0...HEAD
+[v0.4.0]: https://github.com/japaric/stack-sizes/compare/v0.3.1...v0.4.0
 [v0.3.1]: https://github.com/japaric/stack-sizes/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/japaric/stack-sizes/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/japaric/stack-sizes/compare/v0.1.1...v0.2.0
