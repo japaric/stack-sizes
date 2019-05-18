@@ -311,7 +311,7 @@ pub fn analyze_executable(elf: &[u8]) -> Result<Functions<'_>, failure::Error> {
             } else if let Some(sym) = defined.get_mut(&(address & !1)) {
                 sym.stack = Some(stack);
             } else {
-                unreachable!()
+                eprintln!("Address {:?} not found", address);
             }
         }
     }
