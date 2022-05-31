@@ -1,3 +1,12 @@
+**READ THIS**
+
+This proof of concept project is the precursor of [`cargo-call-stack`](https://github.com/japaric/cargo-call-stack) and it's no longer maintained.
+If you would like to implement your own tool that analyzes the stack information of a program, including all its dependencies, you can use `cargo-call-stack` as a reference.
+
+`stack-sizes` depends on unstable features of the compiler / Cargo and it's known to work with nightly-2019-03-29. No effort will be made to make it work with newer versions of the Rust toolchain.
+
+---
+
 # `stack-sizes`
 
 > Tools to print stack usage information emitted by LLVM in human readable format
