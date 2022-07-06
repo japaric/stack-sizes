@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 name = "stack-sizes"
 readme = "README.md"
 repository = "https://github.com/japaric/stack-sizes"
-version = "0.4.0"
+version = "0.5.0"
 
 [[bin]]
 name = "stack-sizes"
@@ -20,13 +20,13 @@ name = "cargo-stack-sizes"
 required-features = ["tools"]
 
 [dependencies]
+anyhow = "1"
 byteorder = "1.2.3"
-failure = "0.1.1"
 leb128 = "0.2.3"
 xmas-elf = "0.6.2"
 
 [dependencies.cargo-project]
-version = "0.2.2"
+version = "0.3.0"
 optional = true
 
 [dependencies.clap]
