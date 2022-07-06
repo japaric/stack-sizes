@@ -6,9 +6,6 @@
 #![deny(missing_docs)]
 #![deny(warnings)]
 
-#[macro_use]
-extern crate failure;
-
 use core::u16;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -17,6 +14,7 @@ use std::{
 #[cfg(feature = "tools")]
 use std::{fs, path::Path};
 
+use anyhow::{anyhow, bail};
 use byteorder::{ReadBytesExt, LE};
 use xmas_elf::{
     header,
@@ -74,12 +72,11 @@ fn is_tag(name: &str) -> bool {
 fn process_symtab_obj<'a, E>(
     entries: &'a [E],
     elf: &ElfFile<'a>,
-) -> Result<
+) -> anyhow::Result<
     (
         BTreeMap<u16, BTreeMap<u64, HashSet<&'a str>>>,
         BTreeMap<u32, u16>,
-    ),
-    failure::Error,
+    )
 >
 where
     E: Entry,
@@ -103,7 +100,7 @@ where
                     .map(|name| !name.is_empty() && !is_tag(name))
                     .unwrap_or(false))
         {
-            let name = name.map_err(failure::err_msg)?;
+            let name = name.map_err(anyhow::Error::msg)?;
 
             names
                 .entry(shndx)
@@ -119,8 +116,8 @@ where
 
 /// Parses an *input* (AKA relocatable) object file (`.o`) and returns a list of symbols and their
 /// stack usage
-pub fn analyze_object(obj: &[u8]) -> Result<HashMap<&str, u64>, failure::Error> {
-    let elf = &ElfFile::new(obj).map_err(failure::err_msg)?;
+pub fn analyze_object(obj: &[u8]) -> anyhow::Result<HashMap<&str, u64>> {
+    let elf = &ElfFile::new(obj).map_err(anyhow::Error::msg)?;
 
     if elf.header.pt2.type_().as_type() != header::Type::Relocatable {
         bail!("object file is not relocatable")
@@ -130,7 +127,7 @@ pub fn analyze_object(obj: &[u8]) -> Result<HashMap<&str, u64>, failure::Error> 
     let mut is_64_bit = false;
     let (shndx2names, symtab2shndx) = match elf
         .find_section_by_name(".symtab")
-        .ok_or_else(|| failure::err_msg("`.symtab` section not found"))?
+        .ok_or_else(|| anyhow!("`.symtab` section not found"))?
         .get_data(elf)
     {
         Ok(SectionData::SymbolTable32(entries)) => process_symtab_obj(entries, elf)?,
@@ -221,7 +218,7 @@ pub fn analyze_object(obj: &[u8]) -> Result<HashMap<&str, u64>, failure::Error> 
 fn process_symtab_exec<'a, E>(
     entries: &'a [E],
     elf: &ElfFile<'a>,
-) -> Result<(HashSet<&'a str>, BTreeMap<u64, Function<'a>>), failure::Error>
+) -> anyhow::Result<(HashSet<&'a str>, BTreeMap<u64, Function<'a>>)>
 where
     E: Entry + core::fmt::Debug,
 {
@@ -236,7 +233,7 @@ where
         let name = entry.get_name(&elf);
 
         if ty == Ok(Type::Func) {
-            let name = name.map_err(failure::err_msg)?;
+            let name = name.map_err(anyhow::Error::msg)?;
 
             if value == 0 && size == 0 {
                 undefined.insert(name);
@@ -273,12 +270,12 @@ where
 }
 
 /// Parses an executable ELF file and returns a list of functions and their stack usage
-pub fn analyze_executable(elf: &[u8]) -> Result<Functions<'_>, failure::Error> {
-    let elf = &ElfFile::new(elf).map_err(failure::err_msg)?;
+pub fn analyze_executable(elf: &[u8]) -> anyhow::Result<Functions<'_>> {
+    let elf = &ElfFile::new(elf).map_err(anyhow::Error::msg)?;
 
     let mut have_32_bit_addresses = false;
     let (undefined, mut defined) = if let Some(section) = elf.find_section_by_name(".symtab") {
-        match section.get_data(elf).map_err(failure::err_msg)? {
+        match section.get_data(elf).map_err(anyhow::Error::msg)? {
             SectionData::SymbolTable32(entries) => {
                 have_32_bit_addresses = true;
 
@@ -325,7 +322,7 @@ pub fn analyze_executable(elf: &[u8]) -> Result<Functions<'_>, failure::Error> {
 
 #[cfg(feature = "tools")]
 #[doc(hidden)]
-pub fn run_exec(exec: &Path, obj: &Path) -> Result<(), failure::Error> {
+pub fn run_exec(exec: &Path, obj: &Path) -> anyhow::Result<()> {
     let exec = &fs::read(exec)?;
     let obj = &fs::read(obj)?;
 
@@ -379,9 +376,9 @@ pub fn run_exec(exec: &Path, obj: &Path) -> Result<(), failure::Error> {
 
 #[cfg(feature = "tools")]
 #[doc(hidden)]
-pub fn run(path: &Path) -> Result<(), failure::Error> {
+pub fn run(path: &Path) -> anyhow::Result<()> {
     let bytes = &fs::read(path)?;
-    let elf = &ElfFile::new(bytes).map_err(failure::err_msg)?;
+    let elf = &ElfFile::new(bytes).map_err(anyhow::Error::msg)?;
 
     if elf.header.pt2.type_().as_type() == header::Type::Relocatable {
         let symbols = analyze_object(bytes)?;

@@ -4,9 +4,9 @@ use std::{
     time::SystemTime,
 };
 
+use anyhow::bail;
 use cargo_project::{Artifact, Profile, Project};
 use clap::{App, AppSettings, Arg, ArgMatches};
-use failure::bail;
 use filetime::FileTime;
 use walkdir::WalkDir;
 
@@ -68,7 +68,7 @@ fn main() {
     }
 }
 
-fn run(matches: &ArgMatches) -> Result<i32, failure::Error> {
+fn run(matches: &ArgMatches) -> anyhow::Result<i32> {
     let mut is_binary = false;
     let (krate, artifact) = if let Some(bin) = matches.value_of("bin") {
         is_binary = true;
