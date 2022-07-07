@@ -5,13 +5,16 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.5.0] - 2022-07-07
+
 ### Changed
 
-- changed error handling from `failure` to `thiserror` (`std::error::Error`)
+- [breaking-change] changed error handling from `failure` to `thiserror` (`std::error::Error`)
 
 ### Removed
 
-- removed the `stack-sizes` and `cargo-stack-sizes` *tools*
+- [breaking-change] removed the `stack-sizes` and `cargo-stack-sizes` *tools*
+- [breaking-change] removed the `tools` Cargo feature
 
 ## [v0.4.0] - 2019-03-22
 
@@ -92,7 +95,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 - Initial release
 
-[Unreleased]: https://github.com/japaric/stack-sizes/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/japaric/stack-sizes/compare/v0.5.0...HEAD
+[v0.5.0]: https://github.com/japaric/stack-sizes/compare/v0.4.0...v0.5.0
 [v0.4.0]: https://github.com/japaric/stack-sizes/compare/v0.3.1...v0.4.0
 [v0.3.1]: https://github.com/japaric/stack-sizes/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/japaric/stack-sizes/compare/v0.2.0...v0.3.0
