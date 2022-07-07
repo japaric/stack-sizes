@@ -5,6 +5,14 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- changed error handling from `failure` to `thiserror` (`std::error::Error`)
+
+### Removed
+
+- removed the `stack-sizes` and `cargo-stack-sizes` *tools*
+
 ## [v0.4.0] - 2019-03-22
 
 ### Added
