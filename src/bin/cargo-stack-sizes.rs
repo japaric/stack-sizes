@@ -155,7 +155,8 @@ fn run(matches: &ArgMatches) -> Result<i32, failure::Error> {
 
     let meta = rustc_version::version_meta()?;
     let host = meta.host;
-    let path = project.path(artifact, profile, target, &host)?;
+    let target_dir = target.map(|s| s.strip_suffix(".json").unwrap_or(s));
+    let path = project.path(artifact, profile, target_dir, &host)?;
 
     // find the object file
     let mut obj = None;
